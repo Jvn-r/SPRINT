@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+    <body>
+        <h1>
+            WEBSOCKEY RANDO DATA TESTTT
+        </h1>
+        <pre id = "log"></pre>
+        
+        <script>
+            const log = document.getElementById("log");
+            const ws = new WebSocket("ws://localhost:8080");
+            
+            ws.onmessage = (event) =>{
+                const data = JSON.parse(event.data);
+                log.textContent += "Recieved DTATA" + data.value + "\n";
+            };
+        </script>
+    </body>
+</html>
