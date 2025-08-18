@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Process Visualizer+</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+
+    body {
+      margin: 0;
+      background: #111;
+      overflow: hidden;
+    }
+
+    text {
+      font-size: 12px;
+      fill: #0f0;
+      font-family: monospace;
+    }
+
+    circle {
+      stroke: #fff;
+      stroke-width: 1.5px;
+    }
+
+  </style>
+</head>
+<body>
+
+  <svg width="100%" height="100%"></svg>
+
+  <script>
+    const svg = d3.select("svg")
+        .attr("width", window.innerWidth)
+        .attr("height", window.innerHeight);
+    //find the svg element thru d3 and then set their sizes
+
+    const width = +svg.attr("width");
+    const height = +svg.attr("height");
+    const g = svg.append("g");
+
+    const zoom = d3.zoom()
+      .scaleExtent([0.1, 4]) //zoom 10% to 400%
+      .on("zoom", (event) => {
+        g.attr("transform", event.transform);
+    });
+    svg.call(zoom);
+
+    const simulation = d3.forceSimulation()
+        .force("link", d3.forceLink().id(d => d.id).distance(120))
+        .force("charge", d3.forceManyBody().strength(-400))
+        .force("center", d3.forceCenter(width / 2, height / 2));
+    //this is for the physics part, this just says; pull connected nodes to 120 px distance, adds a repulsive force to each node so they dont overlap, and keeps layout centered
+        
+    let graph = { nodes: [], links: [] };
+    //simple graph model w nodes and links
+
+    function linkKey(d) {
+      const sid = d.source.id ? d.source.id : d.source;
+      const tid = d.target.id ? d.target.id : d.target;
+      return sid + "->" + tid;
+    }
+
+    function update() {
+      const link = g.selectAll(".link")
+        .data(graph.links, linkKey);
+      //join graph.links to .link
+      
+      link.enter().append("line")
+        .attr("class", "link")
+        .attr("stroke", "#0f0")
+        .merge(link)
+        .attr("stroke-width", d => Math.min(6, (d.weight || 1) ** 0.7));
+      //creates new lines for new links and styles them and merges them to link
+
+      link.exit().remove();
+      //Removes any elements that no longer exist
+
+      //Nodes
+      const node = g.selectAll(".node")
+        .data(graph.nodes, d => d.id);
+
+      const nodeEnter = node.enter().append("g")
+        .attr("class", "node")
+        .call(d3.drag()
+          .on("start", dragStarted)
+          .on("drag", dragged)
+          .on("end", dragEnded));
+        //Handlers for dragging
+
+      nodeEnter.append("circle")
+        .attr("r", 20)
+        .attr("fill", d => d.type === "process" ? "steelblue" : "orange");
+
+      nodeEnter.append("text")
+        .attr("dy", -25)
+        .attr("text-anchor", "middle")
+        .text(d => d.label);
+
+      node.exit().remove();
+
+      simulation
+        .nodes(graph.nodes)
+        .on("tick", ticked);
+      simulation.force("link")
+        .links(graph.links);
+      //gives the simulation the new nodes
+
+      simulation.alpha(1).restart();
+      //resets the simulation
+
+      function ticked() {
+        g.selectAll(".link")
+          .attr("x1", d => d.source.x)
+          .attr("y1", d => d.source.y)
+          .attr("x2", d => d.target.x)
+          .attr("y2", d => d.target.y);
+
+        g.selectAll(".node")
+          .attr("transform", d => `translate(${d.x},${d.y})`);
+      }
+    }
+
+    //Dragging functions
+    function dragStarted(event, d) {
+      if (!event.active) simulation.alphaTarget(0.3).restart();
+      d.fx = d.x;
+      d.fy = d.y;
+    }
+
+    function dragged(event, d) {
+      d.fx = event.x;
+      d.fy = event.y;
+    }
+
+    function dragEnded(event, d) {
+      if (!event.active) simulation.alphaTarget(0);
+      d.fx = null;
+      d.fy = null;
+    }
+
+    function addEdge(procName, pid, filePath, action) {
+      const procId = `${procName}#${pid}`;
+      const fileId = filePath;
+
+      upsertNode(procId, `${procName} (${pid})`, "process");
+      const fileLabel = filePath.split("\\").pop();
+      upsertNode(fileId, fileLabel, "file");
+
+      upsertLink(procId, fileId, action);
+    }
+
+    function upsertNode(id, label, type) {
+      let n = graph.nodes.find(x => x.id === id);
+      if (!n) {
+        n = { id, label, type };
+        graph.nodes.push(n);
+      }
+      return n;
+    }
+    
+    function upsertLink(sourceId, targetId, action) {
+      let l = graph.links.find(l =>
+        (l.source.id || l.source) === sourceId &&
+        (l.target.id || l.target) === targetId
+      );
+      if (!l) {
+        l = { source: sourceId, target: targetId, action, weight: 1, lastSeen: Date.now() };
+        graph.links.push(l);
+      } else {
+        l.weight = (l.weight || 1) + 1;
+        l.lastSeen = Date.now();
+      }
+      return l;
+    }
+
+    let queue = [];
+    let connected = false;
+
+    function connectWS() {
+      const socket = new WebSocket("ws://localhost:8080");
+
+      socket.addEventListener("open", () => {
+        connected = true;
+        console.log("WS connected");
+      });
+
+      socket.addEventListener("message", (event) => {
+        try {
+          const ev = JSON.parse(event.data);
+
+          //Only Test with FileIO categorry for now
+          if (ev.category === "FileIO" && ev.processName && ev.processId && ev.target) {
+            queue.push(ev);
+          }
+        } catch (e) {
+          //Ignore any non-JSON messages
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        connected = false;
+        console.warn("WS closed. Reconnecting in 2s…");
+        setTimeout(connectWS, 2000);
+      });
+
+      socket.addEventListener("error", () => {
+        socket.close();
+      });
+    }
+    connectWS();
+
+    //Flushing queue every 100ms
+    setInterval(() => {
+      if (!queue.length) return;
+      const batch = queue.splice(0, 200); //cap batch size
+      for (const ev of batch) {
+        addEdge(ev.processName, ev.processId, ev.target, ev.operation);
+      }
+      update();
+    }, 100);
+
+  </script>
+</body>
+</html>
