@@ -17,9 +17,11 @@ cd /d "%CURDIR%"
 echo Running wtrace with admin rights in %CD%
 
 @echo off
-wtrace.exe -f > opfile.txt
+::Addded some base level filters to keep only file activity and process activity, optimization ;>
+wtrace --handlers file,process > opfile.txt
 echo.
 echo Press any key to stop wtrace...
 pause > nul
-::Added this coz Ctrl+C didnt work to stop wtrace a few times, so just as an eject button
 
+::Added this coz Ctrl+C didnt work to stop wtrace a few times, so just as an eject button
+::-handlers process,file -f "path <> C:\Windows"
