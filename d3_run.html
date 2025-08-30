@@ -23,22 +23,67 @@
       stroke-width: 1.5px;
     }
 
+    #controls {
+      position: absolute;
+      top: 10px; left: 10px;
+      background: rgba(0,0,0,0.7);
+      color: #0f0;
+      font-family: monospace;
+      font-size: 14px;
+      padding: 10px;
+      border: 1px solid #0f0;
+      border-radius: 5px;
+    }
+
+    #controls button, #controls label {
+      background: #222;
+      color: #0f0;
+      border: 1px solid #0f0;
+      margin: 2px;
+      padding: 3px 5px;
+      font-family: monospace;
+      cursor: pointer;
+    }
+
+    #controls input {
+      margin-right: 4px;
+    }
+
   </style>
 </head>
 <body>
 
+  <!-- control panel ui -->
+  <div id="controls">
+    <div>
+      <button id="pauseBtn">Pause</button>
+      <button id="clearBtn">Clear</button>
+    </div>
+    <div>
+      <label><input type="checkbox" value="FileIO" checked> FileIO</label>
+      <label><input type="checkbox" value="Registry"> Registry</label>
+      <label><input type="checkbox" value="Network"> Network</label>
+    </div>
+    <div id="stats">Events: 0 | Nodes: 0 | Links: 0</div>
+  </div>
+
   <svg width="100%" height="100%"></svg>
 
   <script>
+    //find the svg element thru d3 and then set their sizes
     const svg = d3.select("svg")
         .attr("width", window.innerWidth)
         .attr("height", window.innerHeight);
-    //find the svg element thru d3 and then set their sizes
 
     const width = +svg.attr("width");
     const height = +svg.attr("height");
     const g = svg.append("g");
 
+    //creating separate layers so process nodes always sit on top of link edges
+    const linkLayer = g.append("g").attr("class", "links");
+    const nodeLayer = g.append("g").attr("class", "nodes");
+
+    //setup zooming and panning
     const zoom = d3.zoom()
       .scaleExtent([0.1, 4]) //zoom 10% to 400%
       .on("zoom", (event) => {
@@ -46,14 +91,15 @@
     });
     svg.call(zoom);
 
+    //this is for the physics part, this just says;
+    //pull connected nodes to 120 px distance, adds a repulsive force to each node so they dont overlap, and keeps layout centered
     const simulation = d3.forceSimulation()
         .force("link", d3.forceLink().id(d => d.id).distance(120))
         .force("charge", d3.forceManyBody().strength(-400))
         .force("center", d3.forceCenter(width / 2, height / 2));
-    //this is for the physics part, this just says; pull connected nodes to 120 px distance, adds a repulsive force to each node so they dont overlap, and keeps layout centered
         
-    let graph = { nodes: [], links: [] };
     //simple graph model w nodes and links
+    let graph = { nodes: [], links: [] };
 
     function linkKey(d) {
       const sid = d.source.id ? d.source.id : d.source;
@@ -62,21 +108,28 @@
     }
 
     function update() {
-      const link = g.selectAll(".link")
+      //links
+      const link = linkLayer.selectAll(".link")
         .data(graph.links, linkKey);
-      //join graph.links to .link
       
       link.enter().append("line")
         .attr("class", "link")
-        .attr("stroke", "#0f0")
         .merge(link)
+        .attr("stroke", d => {
+          switch (d.severity) {
+            case "high": return "red";
+            case "medium": return "orange";
+            case "low": return "green";
+            default: return "#0f0"; 
+          }
+        })
         .attr("stroke-width", d => Math.min(6, (d.weight || 1) ** 0.7));
       //creates new lines for new links and styles them and merges them to link
 
       link.exit().remove();
       //Removes any elements that no longer exist
 
-      //Nodes
+      //nodes
       const node = g.selectAll(".node")
         .data(graph.nodes, d => d.id);
 
@@ -99,12 +152,12 @@
 
       node.exit().remove();
 
+      //give new data to simulation
       simulation
         .nodes(graph.nodes)
         .on("tick", ticked);
       simulation.force("link")
         .links(graph.links);
-      //gives the simulation the new nodes
 
       simulation.alpha(1).restart();
       //resets the simulation
@@ -139,17 +192,19 @@
       d.fy = null;
     }
 
-    function addEdge(procName, pid, filePath, action) {
-      const procId = `${procName}#${pid}`;
+    //this creates the edges bw proc node and file node
+    function addEdge(procName, pid, filePath, action, severity) {
+      const procId = `${procName}#${pid}`; //unique id with proc name + proc id, to diff bw diff process w same name and diff proc ids
       const fileId = filePath;
 
-      upsertNode(procId, `${procName} (${pid})`, "process");
-      const fileLabel = filePath.split("\\").pop();
+      upsertNode(procId, `${procName} (${pid})`, "process"); //ensures node exists
+      const fileLabel = filePath.split("\\").pop(); 
       upsertNode(fileId, fileLabel, "file");
 
-      upsertLink(procId, fileId, action);
+      upsertLink(procId, fileId, action, severity);
     }
 
+    //looks for an existing node w same id, if doesnt exist creates a new node obj
     function upsertNode(id, label, type) {
       let n = graph.nodes.find(x => x.id === id);
       if (!n) {
@@ -159,67 +214,129 @@
       return n;
     }
     
-    function upsertLink(sourceId, targetId, action) {
-      let l = graph.links.find(l =>
+    //makes sure the connection bw the source(process) and target(files) exists, it checks the existing graph if that connection exists, if not creates and pushes it to graph
+    function upsertLink(sourceId, targetId, action, severity="info") {
+      let l = graph.links.find(l => 
         (l.source.id || l.source) === sourceId &&
         (l.target.id || l.target) === targetId
       );
       if (!l) {
-        l = { source: sourceId, target: targetId, action, weight: 1, lastSeen: Date.now() };
+        l = { source: sourceId, target: targetId, action, weight: 1, lastSeen: Date.now(), severity };
         graph.links.push(l);
       } else {
         l.weight = (l.weight || 1) + 1;
         l.lastSeen = Date.now();
+        l.severity = severity; //overwrite severity with latest update
       }
       return l;
     }
 
+    //state for events/filters/queue
     let queue = [];
     let connected = false;
+    let paused = false;
+    let filters = new Set(["FileIO"]); //start w FileIO only
+    let stats = { events: 0, nodes: 0, links: 0 };
 
+    //attach control buttons to their fucntions
+    //pause
+    document.getElementById("pauseBtn").onclick = () => {
+      paused = !paused;
+      document.getElementById("pauseBtn").innerText = paused ? "Resume" : "Pause";
+    };
+    
+    //clear screen
+    document.getElementById("clearBtn").onclick = () => {
+      graph.nodes = [];
+      graph.links = [];
+      stats = { events: 0, nodes: 0, links: 0 };
+      update();
+      updateStats();
+    };
+
+    //preset filters
+    document.querySelectorAll("#controls input[type=checkbox]").forEach(cb => {
+      cb.addEventListener("change", () => {
+        if (cb.checked) filters.add(cb.value);
+        else filters.delete(cb.value);
+        console.log("Filters now:", [...filters]);
+        //send filter updates to server
+        if (socket && connected) {
+          socket.send(JSON.stringify({ type:"filters", categories:[...filters] }));
+        }
+      });
+    });
+
+    //aggregate fns for stats
+    function updateStats() {
+      document.getElementById("stats").innerText =
+        `Events: ${stats.events} | Nodes: ${graph.nodes.length} | Links: ${graph.links.length}`;
+    }
+
+    //websockets stuff, like creating a handshake bw this and parser.js, sending filters back to parser.js
+    let socket;
     function connectWS() {
-      const socket = new WebSocket("ws://localhost:8080");
+      socket = new WebSocket("ws://localhost:8080");
 
       socket.addEventListener("open", () => {
         connected = true;
         console.log("WS connected");
+        //sending initial filters
+        socket.send(JSON.stringify({ type:"filters", categories:[...filters] }));
       });
 
       socket.addEventListener("message", (event) => {
         try {
           const ev = JSON.parse(event.data);
 
-          //Only Test with FileIO categorry for now
-          if (ev.category === "FileIO" && ev.processName && ev.processId && ev.target) {
+          if (ev.type === "stats") {
+            stats.events = ev.events;
+            updateStats();
+          }
+          else if (ev.type === "ProcessBatch") {
+            //to get a bundle of events for one process
+            for (const e of ev.events) {
+              if (!paused && filters.has(e.category)) {
+                queue.push(e);
+                stats.events++;
+              }   
+            }
+          }
+          else if (ev.category && !paused && filters.has(ev.category)) {
+            //single event mode
             queue.push(ev);
+            stats.events++;
           }
         } catch (e) {
-          //Ignore any non-JSON messages
+          //ignore non-JSON
         }
       });
 
+      //when websocket is closed it'll be known here
       socket.addEventListener("close", () => {
         connected = false;
         console.warn("WS closed. Reconnecting in 2s…");
         setTimeout(connectWS, 2000);
       });
 
+      //same thing for error encountered by websockets
       socket.addEventListener("error", () => {
         socket.close();
       });
     }
     connectWS();
 
-    //Flushing queue every 100ms
+    //checking every 0.1s if new events came in, if yes update graph, taking 200 events from the queue at a time
     setInterval(() => {
-      if (!queue.length) return;
-      const batch = queue.splice(0, 200); //cap batch size
+      if (!queue.length || paused) return;
+      const batch = queue.splice(0, 200); //cap batch size to 200
       for (const ev of batch) {
-        addEdge(ev.processName, ev.processId, ev.target, ev.operation);
+        addEdge(ev.processName, ev.processId, ev.targetShort || ev.target, ev.operation, ev.severity);
       }
       update();
+      updateStats();
     }, 100);
 
-  </script>
+  </script
 </body>
 </html>
