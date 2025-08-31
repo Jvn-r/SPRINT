@@ -18,7 +18,7 @@ echo Running wtrace with admin rights in %CD%
 
 @echo off
 ::Addded some base level filters to keep only file activity and process activity, optimization ;>
-wtrace > opfile.txt
+wtrace --handlers file,process > opfile.txt
 echo.
 echo Press any key to stop wtrace...
 pause > nul
