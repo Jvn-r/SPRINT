@@ -61,8 +61,6 @@
     </div>
     <div>
       <label><input type="checkbox" value="FileIO" checked> FileIO</label>
-      <label><input type="checkbox" value="Registry"> Registry</label>
-      <label><input type="checkbox" value="Network"> Network</label>
     </div>
     <div id="stats">Events: 0 | Nodes: 0 | Links: 0</div>
   </div>
@@ -260,7 +258,6 @@
         if (cb.checked) filters.add(cb.value);
         else filters.delete(cb.value);
         console.log("Filters now:", [...filters]);
-        //send filter updates to server
         if (socket && connected) {
           socket.send(JSON.stringify({ type:"filters", categories:[...filters] }));
         }
